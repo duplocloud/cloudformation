@@ -1,0 +1,69 @@
+name: 📦 Lambda ZIP Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag to build
+        required: false
+        type: string
+    outputs:
+      version:
+        description: The true version of the package
+        value: ${{ jobs.package.outputs.version }}
+      artifact:
+        description: The ZIP artifact name
+        value: ${{ jobs.package.outputs.artifact }}
+
+jobs:
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check_version.outputs.version }}
+      artifact: ${{ steps.check_version.outputs.artifact }}
+    steps:
+
+    - name: Checkout Code
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ inputs.tag }}
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.13"
+        cache: pip
+        cache-dependency-path: pyproject.toml
+
+    - name: Install Build Dependencies
+      run: pip install .[build]
+
+    - name: Check True Version
+      id: check_version
+      run: |
+        version=$(python -m setuptools_scm)
+        artifact="duploctl-cfn-${version}.zip"
+        echo "Building Version: $version"
+        echo "version=$version" >> $GITHUB_OUTPUT
+        echo "artifact=$artifact" >> $GITHUB_OUTPUT
+
+    - name: Build Lambda ZIP
+      run: |
+        mkdir -p package
+        pip install . --target ./package
+        cd package && zip -r ../duploctl-cfn.zip .
+
+    - name: Upload ZIP Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.check_version.outputs.artifact }}
+        path: duploctl-cfn.zip
+        retention-days: 30

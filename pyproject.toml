@@ -1,0 +1,59 @@
+[project]
+name = "duplocloud-cfn"
+description = "AWS CloudFormation custom resource provider for DuploCloud."
+readme = "README.md"
+dynamic = ["version"]
+requires-python = ">=3.10.0"
+keywords = ["duplocloud", "cloudformation", "lambda", "aws"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+authors = [{ name = "DuploCloud", email = "support@duplocloud.net" }]
+maintainers = [{ name = "DuploCloud", email = "support@duplocloud.net" }]
+dependencies = [
+  "duplocloud-client>=0.4.2",
+]
+
+[project.optional-dependencies]
+build = [
+  "setuptools_scm",
+  "build",
+  "wheel>=0.46.2",
+]
+test = [
+  "pytest",
+  "pytest-mock",
+  "pytest-cov",
+  "ruff",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project.urls]
+Homepage = "https://github.com/duplocloud/cloudformation"
+Issues = "https://github.com/duplocloud/cloudformation/issues"
+
+[tool.setuptools_scm]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "--verbose --cov=duplocloud --cov-report term-missing"
+testpaths = ["tests"]
+markers = [
+  "unit: marks tests as unit tests",
+  "integration: marks tests as integration tests",
+]
+
+[tool.coverage.run]
+omit = [
+  "*_test.py",
+  "**/conftest.py",
+  "**/__*__.py",
+]
+
+[tool.ruff]
+line-length = 79

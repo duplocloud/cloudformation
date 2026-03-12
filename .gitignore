@@ -1,0 +1,61 @@
+# Build & distribution artifacts
+build/
+dist/
+out/
+artifacts/
+*.egg-info/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Tool caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tmp/
+
+# Local runtime/config
+config/
+.github/output
+.github/env
+
+# Virtual environments
+venv/
+.env/
+.venv/
+.direnv/
+.direnv
+
+# Environment & secrets
+.envrc
+.env
+*.env
+op.env
+
+# OS / Editor noise
+.DS_Store
+.idea/
+.qodo
+
+# VSCode workspace (keep tasks)
+!.vscode/
+
+# Test results
+test-results.xml
+
+# Logs
+*.log
+logs/
+logs.txt
+
+# Notebooks & scratch
+notebooks/
+stuff/
+foo.*
+
+# AI tooling
+.codex/

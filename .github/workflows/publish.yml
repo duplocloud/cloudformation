@@ -1,0 +1,114 @@
+name: 🧬 Publish Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Version to bump to
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - premajor
+          - preminor
+          - prepatch
+      push:
+        description: Push changes and create release
+        default: false
+        type: boolean
+
+jobs:
+
+  test:
+    name: Test
+    uses: ./.github/workflows/test.yml
+
+  version:
+    name: Version
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.bump.outputs.tag }}
+      version: ${{ steps.bump.outputs.version }}
+      release-notes: ${{ steps.bump.outputs.release-notes }}
+    steps:
+
+    - name: Validate Branch
+      if: inputs.push
+      run: |
+        if [[ "$GITHUB_REF_NAME" != "main" ]]; then
+          echo "Error: Releases can only be pushed from main. Current branch: $GITHUB_REF_NAME"
+          exit 1
+        fi
+
+    - name: Create GitHub App Token
+      id: app-token
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ vars.GH_APP_ID }}
+        private-key: ${{ secrets.GH_APP_KEY }}
+
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+        token: ${{ steps.app-token.outputs.token }}
+
+    - name: Bump Version
+      id: bump
+      uses: duplocloud/version-bump@main
+      with:
+        version: ${{ inputs.action }}
+        push: ${{ inputs.push }}
+        token: ${{ steps.app-token.outputs.token }}
+
+  image:
+    name: Image
+    needs: version
+    uses: ./.github/workflows/image.yml
+    with:
+      tag: ${{ inputs.push && needs.version.outputs.tag || '' }}
+      push: ${{ inputs.push }}
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME || '' }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD || '' }}
+
+  package:
+    name: Package
+    needs: version
+    uses: ./.github/workflows/package.yml
+    with:
+      tag: ${{ inputs.push && needs.version.outputs.tag || '' }}
+
+  release:
+    name: Release
+    needs:
+    - version
+    - image
+    - package
+    if: inputs.push
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Create GitHub App Token
+      id: app-token
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ vars.GH_APP_ID }}
+        private-key: ${{ secrets.GH_APP_KEY }}
+
+    - name: Download ZIP Artifact
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ needs.package.outputs.artifact }}
+        path: dist
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ needs.version.outputs.tag }}
+        body: ${{ needs.version.outputs.release-notes }}
+        files: dist/*.zip
+        token: ${{ steps.app-token.outputs.token }}
