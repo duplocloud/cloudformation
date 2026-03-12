@@ -33,7 +33,7 @@ jobs:
       image: ${{ steps.build_image.outputs.uri }}
     environment:
       name: ${{ inputs.push && 'dockerhub' || '' }}
-      url: ${{ inputs.push && 'https://hub.docker.com/r/duplocloud/cfn' || '' }}
+      url: ${{ inputs.push && 'https://hub.docker.com/r/duplocloud/duploctl-cfn' || '' }}
     env:
       PY_VERSION: "3.13"
     steps:
@@ -51,7 +51,7 @@ jobs:
       with:
         type: bake
         target: cfn
-        repo: duplocloud/cfn
+        repo: duplocloud/duploctl-cfn
         push: ${{ inputs.push }}
         docker-username: ${{ secrets.DOCKER_USERNAME }}
         docker-password: ${{ secrets.DOCKER_PASSWORD }}

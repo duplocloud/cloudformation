@@ -43,7 +43,7 @@ The Lambda function receives CloudFormation custom resource lifecycle events (Cr
 aws lambda create-function \
   --function-name duploctl \
   --package-type Image \
-  --code ImageUri=duplocloud/cfn:latest \
+  --code ImageUri=duplocloud/duploctl-cfn:latest \
   --role arn:aws:iam::123456789012:role/duploctl-lambda-role \
   --timeout 900 \
   --environment Variables="{DUPLO_HOST=https://myportal.duplocloud.net,DUPLO_TOKEN=...}"
@@ -106,7 +106,7 @@ DuploctlLambda:
     FunctionName: duploctl
     PackageType: Image
     Code:
-      ImageUri: duplocloud/cfn:latest
+      ImageUri: duplocloud/duploctl-cfn:latest
     Role: !GetAtt DuploctlRole.Arn
     Timeout: 900
     Environment:
