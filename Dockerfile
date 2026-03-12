@@ -15,7 +15,7 @@ python -m build --no-isolation
 EOF
 
 # Stage 2: Lambda runtime image
-FROM public.ecr.aws/lambda/python:${PY_VERSION}
+FROM public.ecr.aws/lambda/python:${PY_VERSION} AS runner
 
 COPY --from=builder /app/dist/*.whl /tmp/
 

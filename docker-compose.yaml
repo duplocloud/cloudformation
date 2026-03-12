@@ -1,0 +1,22 @@
+services:
+  cfn:
+    image: &image duplocloud/cfn:latest
+    build:
+      context: .
+      target: runner
+      args:
+        PY_VERSION: ${PY_VERSION:-3.13}
+      tags:
+      - *image
+      - duplocloud/cfn:${GIT_SHA:-latest}
+      - duplocloud/cfn:${GIT_REF:-latest}
+      - duplocloud/cfn:${GIT_TAG:-latest}
+      x-bake:
+        platforms:
+        - linux/amd64
+        - linux/arm64
+        cache-to: type=gha,scope=cfn,mode=max
+        cache-from: type=gha,scope=cfn
+    environment:
+      DUPLO_HOST: ${DUPLO_HOST}
+      DUPLO_TOKEN: ${DUPLO_TOKEN}
