@@ -6,6 +6,7 @@ RESERVED_PROPERTIES = frozenset([
     "Validate",
     "Query",
     "AllowImport",
+    "Force",
     "Body",
 ])
 
@@ -63,7 +64,7 @@ def extract_properties(properties: dict) -> tuple[dict, dict]:
             reserved[key] = props.pop(key)
 
     # Coerce boolean strings for known boolean fields
-    for bool_key in ("Wait", "Validate", "AllowImport"):
+    for bool_key in ("Wait", "Validate", "AllowImport", "Force"):
         if bool_key in reserved:
             val = reserved[bool_key]
             if isinstance(val, str):
@@ -99,7 +100,14 @@ def get_id(resource, data: dict) -> str:
     try:
         name = resource.name_from_body(data)
     except (KeyError, AttributeError):
-        name = str(data)
+        # Try common name fields before falling back to repr.
+        # CFN PhysicalResourceId is limited to 1024 characters.
+        for _key in ("AccountName", "Name", "FunctionName", "TenantId"):
+            if _key in data:
+                name = data[_key]
+                break
+        else:
+            name = str(data)[:900]
 
     tenant = getattr(resource, "_tenant", None)
     if tenant and isinstance(tenant, dict):

@@ -3,14 +3,13 @@
 These tests require live DuploCloud credentials. They are organised into
 an ordered class so each step is visible independently:
 
-  Step 10 — ECR repo ensured (cfn apply_ecr)
-  Step 20 — Docker image pushed to private ECR
-  Step 30 — Lambda deployed (cfn apply_lambda)
-  Step 40 — CFN stack created (CREATE_COMPLETE)
-  Step 50 — CFN stack read back (cfn find)
-  Step 60 — CFN stack listed (cfn list includes it)
-  Step 70 — CFN stack deleted (DELETE_COMPLETE)
-  Step 80 — Lambda cleaned up
+  Step 10 — Public DockerHub image copied to portal ECR (cfn copy_image)
+  Step 20 — Lambda deployed (cfn apply_lambda)
+  Step 30 — CFN stack created (CREATE_COMPLETE)
+  Step 40 — CFN stack read back (cfn find)
+  Step 50 — CFN stack listed (cfn list includes it)
+  Step 60 — CFN stack deleted (DELETE_COMPLETE)
+  Step 70 — Lambda cleaned up
 
 Run full suite:
   pytest tests/test_integration.py -m integration -s
@@ -19,11 +18,8 @@ Cleanup leftover resources from a failed run:
   pytest tests/test_integration.py -m cleanup -s
 """
 
-import base64
 import json
-import os
 import random
-import subprocess
 import time
 
 import pytest
@@ -108,9 +104,9 @@ def _stack_template(lambda_arn, infra_name, tenant_name, vpc_cidr) -> str:
                 "DependsOn": "DuploInfra",
                 "Properties": {
                     "ServiceToken": lambda_arn,
-                    # Name is required by name_from_body; AccountName by the API.
-                    "Body": {"Name": tenant_name, "AccountName": tenant_name, "PlanID": infra_name},
+                    "Body": {"AccountName": tenant_name, "PlanID": infra_name},
                     "Wait": True,
+                    "Force": True,
                 },
             },
         },
@@ -140,81 +136,38 @@ class TestCfnIntegration:
     Steps run in numerical order; later steps depend on earlier ones.
     If a step fails, all dependent steps are automatically skipped.
 
-      Step 10 — ECR repo applied (cfn apply_ecr)
-      Step 20 — Docker image pushed to private ECR
-      Step 30 — Lambda applied (cfn apply_lambda)
-      Step 40 — CFN stack created (cfn create → CREATE_COMPLETE)
-      Step 50 — CFN stack read back (cfn find)
-      Step 60 — CFN stack listed (cfn list)
-      Step 70 — CFN stack deleted (cfn delete → DELETE_COMPLETE)
-      Step 80 — Lambda deleted
+      Step 10 — Public DockerHub image copied to portal ECR (cfn copy_image)
+      Step 20 — Lambda deployed (cfn apply_lambda)
+      Step 30 — CFN stack created (CREATE_COMPLETE)
+      Step 40 — CFN stack read back (cfn find)
+      Step 50 — CFN stack listed (cfn list includes it)
+      Step 60 — CFN stack deleted (DELETE_COMPLETE)
+      Step 70 — Lambda cleaned up
+
+    NOTE: No Docker images are built here. The public image
+    ``duplocloud/duploctl-cfn:latest`` must be published to Docker Hub
+    first via ``docker buildx bake --push``. ``copy_image`` pulls the
+    ``linux/amd64`` digest from Docker Hub and re-publishes it to the
+    portal's ECR (Lambda requires images in the same account + region).
     """
 
-    # -- Step 10: ECR repo -------------------------------------------------
+    ecr_image_uri: str = None
+    lambda_arn: str = None
+
+    # -- Step 10: Copy public image to ECR ---------------------------------
 
     @pytest.mark.order(10)
-    @pytest.mark.dependency(name="cfn_ecr_repo")
-    def test_apply_ecr(self, cfn_plugin):
-        """Apply the ECR repo via cfn.apply_ecr() — creates if missing."""
-        repo = cfn_plugin.apply_ecr(ECR_REPO_NAME)
-        assert "RepositoryUri" in repo
-        assert ECR_REPO_NAME in repo["RepositoryUri"]
-        TestCfnIntegration.ecr_repo = repo
+    @pytest.mark.dependency(name="cfn_ecr_push")
+    def test_copy_image(self, cfn_plugin):
+        """Pull linux/amd64 from Docker Hub and push to the portal's ECR."""
+        result = cfn_plugin.copy_image()
+        assert "image_uri" in result
+        assert ECR_REPO_NAME in result["image_uri"]
+        TestCfnIntegration.ecr_image_uri = result["image_uri"]
 
-    # -- Step 20: Build and push Lambda image to private ECR ---------------
+    # -- Step 20: Lambda ---------------------------------------------------
 
     @pytest.mark.order(20)
-    @pytest.mark.dependency(name="cfn_ecr_push", depends=["cfn_ecr_repo"], scope="session")
-    def test_push_image(self, ecr_boto):
-        """Build the local Dockerfile and push to the private ECR repo.
-
-        NOTE: This step differs from `duploctl cfn setup` on purpose.
-        `setup` does NOT build anything — it pulls the public amd64 image
-        from Docker Hub by content-addressed digest and re-publishes it
-        to the portal’s ECR.  Here we build from the local source tree so
-        the integration tests exercise the updated handler code before it
-        has been released to Docker Hub.
-
-        AWS Lambda (and the DuploCloud API) require Docker V2 schema 2
-        single-architecture manifests.  `docker buildx build` with
-        `--provenance=false` and `oci-mediatypes=false` produces exactly
-        that without the OCI manifest-list that BuildKit emits by default.
-        """
-        repo_uri = self.ecr_repo["RepositoryUri"]
-        registry = repo_uri.split("/")[0]
-        image_uri = f"{repo_uri}:latest"
-
-        token_resp = ecr_boto.get_authorization_token()
-        auth = token_resp["authorizationData"][0]
-        token = base64.b64decode(auth["authorizationToken"]).decode()
-        username, password = token.split(":", 1)
-        subprocess.run(
-            ["docker", "login", "--username", username, "--password-stdin", registry],
-            input=password.encode(),
-            check=True,
-            capture_output=True,
-        )
-
-        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        # Build amd64 image directly into the registry using Docker V2
-        # schema 2 media types (—not OCI) so Lambda accepts it.
-        subprocess.run(
-            [
-                "docker", "buildx", "build",
-                "--platform", "linux/amd64",
-                "--provenance=false",
-                f"--output=type=image,push=true,oci-mediatypes=false,name={image_uri}",
-                ".",
-            ],
-            cwd=repo_root,
-            check=True,
-        )
-
-        TestCfnIntegration.ecr_image_uri = image_uri
-
-    # -- Step 30: Lambda ---------------------------------------------------
-
-    @pytest.mark.order(30)
     @pytest.mark.dependency(name="cfn_lambda", depends=["cfn_ecr_push"], scope="session")
     def test_apply_lambda(self, cfn_plugin):
         """Apply the CFN lambda via cfn.apply_lambda() — creates or updates."""
@@ -227,9 +180,9 @@ class TestCfnIntegration:
         assert LAMBDA_NAME in result["FunctionArn"]
         TestCfnIntegration.lambda_arn = result["FunctionArn"]
 
-    # -- Step 40: Stack create ---------------------------------------------
+    # -- Step 30: Stack create ---------------------------------------------
 
-    @pytest.mark.order(40)
+    @pytest.mark.order(30)
     @pytest.mark.dependency(name="cfn_stack_create", depends=["cfn_lambda"], scope="session")
     def test_stack_create(self, cfn_plugin, stack_name, duplo):
         """Create the CFN stack and wait for CREATE_COMPLETE."""
@@ -265,9 +218,9 @@ class TestCfnIntegration:
             f"Stack ended in {result['StackStatus']}"
         )
 
-    # -- Step 50: Stack find -----------------------------------------------
+    # -- Step 40: Stack find -----------------------------------------------
 
-    @pytest.mark.order(50)
+    @pytest.mark.order(40)
     @pytest.mark.dependency(name="cfn_stack_find", depends=["cfn_stack_create"], scope="session")
     def test_stack_find(self, cfn_plugin, stack_name):
         """Find the created stack by name and verify its fields."""
@@ -276,9 +229,9 @@ class TestCfnIntegration:
         assert stack["StackStatus"] == "CREATE_COMPLETE"
         assert "StackId" in stack
 
-    # -- Step 60: Stack list -----------------------------------------------
+    # -- Step 50: Stack list -----------------------------------------------
 
-    @pytest.mark.order(60)
+    @pytest.mark.order(50)
     @pytest.mark.dependency(name="cfn_stack_list", depends=["cfn_stack_create"], scope="session")
     def test_stack_list(self, cfn_plugin, stack_name):
         """List all stacks and confirm our stack appears."""
@@ -286,9 +239,9 @@ class TestCfnIntegration:
         names = [s.get("StackName") for s in stacks]
         assert stack_name in names
 
-    # -- Step 70: Stack delete ---------------------------------------------
+    # -- Step 60: Stack delete ---------------------------------------------
 
-    @pytest.mark.order(70)
+    @pytest.mark.order(60)
     @pytest.mark.dependency(name="cfn_stack_delete", depends=["cfn_stack_find"], scope="session")
     def test_stack_delete(self, cfn_plugin, stack_name):
         """Delete the CFN stack and verify DELETE_COMPLETE."""
@@ -301,9 +254,9 @@ class TestCfnIntegration:
         except DuploError as exc:
             assert exc.code == 404
 
-    # -- Step 80: Lambda delete --------------------------------------------
+    # -- Step 70: Lambda delete --------------------------------------------
 
-    @pytest.mark.order(80)
+    @pytest.mark.order(70)
     @pytest.mark.dependency(name="cfn_lambda_delete", depends=["cfn_lambda"], scope="session")
     def test_lambda_delete(self, cfn_plugin):
         """Delete the integration test Lambda function."""
@@ -337,7 +290,7 @@ def test_cleanup_duplo_resources(duplo):
 
     try:
         tenant_svc.find(TENANT_NAME)
-        tenant_svc.delete(TENANT_NAME)
+        tenant_svc.delete(TENANT_NAME, force=True)
         print(f"  Deleted tenant: {TENANT_NAME}")
     except Exception:
         print(f"  Tenant '{TENANT_NAME}' not found — already clean")

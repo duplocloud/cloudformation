@@ -4,7 +4,9 @@ Manages CloudFormation stacks and the CFN lambda setup via the
 duploctl-aws @Client for AWS authentication.
 """
 
+import base64
 import logging
+import subprocess
 import time
 
 import boto3
@@ -105,7 +107,13 @@ class DuploCfn(DuploResource):
         """
         if mode == "image":
             repo = self.apply_ecr()
-            image_uri = image or f"{repo['RepositoryUri']}:latest"
+            ecr_uri = f"{repo['RepositoryUri']}:latest"
+            image_uri = image or ecr_uri
+            if not image:
+                self.copy_image(
+                    src=DEFAULT_PUBLIC_IMAGE,
+                    dst=ecr_uri,
+                )
             return self.apply_lambda(
                 lambda_name=lambda_name,
                 image=image_uri,
@@ -121,6 +129,65 @@ class DuploCfn(DuploResource):
         raise DuploError(
             f"Unknown mode '{mode}'. Use 'image' or 'zip'.", 400
         )
+
+    def copy_image(
+        self,
+        src: str = DEFAULT_PUBLIC_IMAGE,
+        dst: str = None,
+        repo_name: str = ECR_REPO_NAME,
+    ) -> dict:
+        """Copy the public DockerHub image into the portal's ECR registry.
+
+        Pulls the ``linux/amd64`` platform variant from *src* (a public
+        Docker Hub multi-arch image) and pushes it into *dst* (an ECR URI
+        in the same account and region as the portal).
+
+        Lambda requires images to be in ECR in the same account and region.
+        No image is built here — the source image must already exist on
+        Docker Hub (published via ``docker buildx bake --push``).
+
+        Args:
+          src: Public source image (default: ``duplocloud/duploctl-cfn:latest``).
+          dst: Destination ECR URI. Defaults to the portal's ECR repo ``duploctl-cfn:latest``.
+          repo_name: ECR repository name used when *dst* is not provided.
+
+        Returns:
+          image_uri: The ECR image URI that was pushed.
+
+        Raises:
+          DuploError: If the pull or push fails.
+        """
+        if not dst:
+            repo = self.apply_ecr(repo_name)
+            dst = f"{repo['RepositoryUri']}:latest"
+
+        registry = dst.split("/")[0]
+        ecr_client = self.client.load("ecr")
+        token_resp = ecr_client.get_authorization_token()
+        auth_data = token_resp["authorizationData"][0]
+        ecr_token = base64.b64decode(auth_data["authorizationToken"]).decode()
+        ecr_user, ecr_pass = ecr_token.split(":", 1)
+
+        subprocess.run(
+            ["docker", "pull", src],
+            check=True,
+        )
+        subprocess.run(
+            ["docker", "tag", src, dst],
+            check=True,
+        )
+        subprocess.run(
+            ["docker", "login", "--username", ecr_user,
+             "--password-stdin", registry],
+            input=ecr_pass.encode(),
+            check=True,
+        )
+        subprocess.run(
+            ["docker", "push", dst],
+            check=True,
+        )
+        logger.info("Copied '%s' to '%s'", src, dst)
+        return {"image_uri": dst}
 
     def apply_ecr(self, repo_name: str = ECR_REPO_NAME) -> dict:
         """Ensure the CFN ECR repository exists and return the repo object.

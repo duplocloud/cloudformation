@@ -1,5 +1,6 @@
 """CFN custom resource lifecycle handling (Create / Update / Delete)."""
 
+import inspect
 import json
 import logging
 import os
@@ -114,6 +115,7 @@ def handle_cfn_event(event: dict, context) -> None:
         validate = reserved.get("Validate", True)
         query = reserved.get("Query")
         allow_import = reserved.get("AllowImport", True)
+        force = reserved.get("Force", False)
 
         duplo = DuploCtl(
             host=os.environ["DUPLO_HOST"],
@@ -212,7 +214,11 @@ def handle_cfn_event(event: dict, context) -> None:
                         kind, name,
                     )
                 else:
-                    resource.delete(name)
+                    sig = inspect.signature(resource.delete)
+                    if "force" in sig.parameters:
+                        resource.delete(name, force=force)
+                    else:
+                        resource.delete(name)
                     logger.info(
                         "Delete %s '%s': delete call complete", kind, name
                     )

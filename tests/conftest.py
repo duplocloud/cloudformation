@@ -3,6 +3,19 @@
 import os
 import pytest
 
+# Strip any ambient AWS credentials/profile so that boto3 always uses
+# credentials injected by DuploCloud JIT and never falls back to a
+# local profile or environment that belongs to a different portal.
+for _var in (
+    "AWS_PROFILE",
+    "AWS_DEFAULT_PROFILE",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_SECURITY_TOKEN",
+):
+    os.environ.pop(_var, None)
+
 
 # ---------------------------------------------------------------------------
 # Integration fixtures
