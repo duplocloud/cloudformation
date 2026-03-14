@@ -82,6 +82,29 @@ jobs:
     with:
       tag: ${{ inputs.push && needs.version.outputs.tag || '' }}
 
+  pypi:
+    name: PyPI
+    needs:
+    - version
+    - package
+    if: inputs.push
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/project/duploctl-cfn
+    steps:
+
+    - name: Download Package Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ needs.package.outputs.package }}
+        path: dist
+
+    - name: Publish Package to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+
   release:
     name: Release
     needs:
@@ -99,16 +122,69 @@ jobs:
         app-id: ${{ vars.GH_APP_ID }}
         private-key: ${{ secrets.GH_APP_KEY }}
 
+    - name: Registry Info
+      id: registry
+      env:
+        TAG: ${{ needs.version.outputs.tag }}
+      run: |
+        URL="https://hub.docker.com/r/duplocloud/duploctl-cfn"
+        BADGE="[![Docker Hub](https://img.shields.io/badge/Docker-Hub-blue?style=flat-square&logo=docker)](${URL})"
+        echo "url=${URL}" >> "$GITHUB_OUTPUT"
+        echo "image=duplocloud/duploctl-cfn:${TAG}" >> "$GITHUB_OUTPUT"
+        echo "badge=${BADGE}" >> "$GITHUB_OUTPUT"
+
     - name: Download ZIP Artifact
-      uses: actions/download-artifact@v8
+      uses: actions/download-artifact@v4
       with:
         name: ${{ needs.package.outputs.artifact }}
+        path: dist
+
+    - name: Download Package Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ needs.package.outputs.package }}
         path: dist
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ needs.version.outputs.tag }}
-        body: ${{ needs.version.outputs.release-notes }}
-        files: dist/*.zip
         token: ${{ steps.app-token.outputs.token }}
+        name: ${{ needs.version.outputs.tag }}
+        tag_name: ${{ needs.version.outputs.tag }}
+        prerelease: ${{ contains(needs.version.outputs.tag, '-') }}
+        files: |
+          dist/*.zip
+          dist/*.tar.gz
+          dist/*.whl
+        body: |
+          [![Publish](${{ github.server_url }}/${{ github.repository }}/actions/workflows/publish.yml/badge.svg)](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) ${{ steps.registry.outputs.badge }}
+
+          ${{ needs.version.outputs.release-notes }}
+
+          ## Installation
+
+          ### duploctl Plugin (PyPI)
+          ```sh
+          pip install duploctl-cfn==${{ needs.package.outputs.version }}
+          ```
+
+          ### Lambda ZIP
+          Pre-built Lambda deployment package attached as `duploctl-cfn-${{ needs.package.outputs.version }}.zip`.
+
+          ### Docker Image
+          Docker Hub: ${{ steps.registry.outputs.url }}
+          ```sh
+          docker pull duplocloud/duploctl-cfn:${{ needs.version.outputs.tag }}
+          ```
+
+    - name: Summary
+      run: |
+        cat <<EOF > "$GITHUB_STEP_SUMMARY"
+        ## Publish Complete
+
+        **Tag**: ${{ needs.version.outputs.tag }}
+        **Image**: ${{ steps.registry.outputs.image }}
+
+        ### Release Notes
+        ${{ needs.version.outputs.release-notes }}
+        EOF

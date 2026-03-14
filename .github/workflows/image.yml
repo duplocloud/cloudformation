@@ -53,6 +53,7 @@ jobs:
         target: cfn
         repo: duplocloud/duploctl-cfn
         push: ${{ inputs.push }}
+        extra-args: --provenance=false
         docker-username: ${{ secrets.DOCKER_USERNAME }}
         docker-password: ${{ secrets.DOCKER_PASSWORD }}
 

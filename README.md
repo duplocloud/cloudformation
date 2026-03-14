@@ -89,46 +89,34 @@ duploctl cfn setup --mode zip --bucket my-artifacts-bucket
 
 ## Building and publishing the Lambda image
 
-The Docker image is multi-arch and built with `docker buildx bake`:
+The Docker image is built with `docker buildx bake`. The `--provenance=false` flag is
+**required** so the image is pushed as a plain Docker V2 Schema 2 manifest (not an OCI
+manifest list), which AWS Lambda requires:
 
 ```sh
-# Build and push to Docker Hub (CI — both amd64 and arm64)
-docker buildx bake --push
-
-# Build locally for testing
-docker build --platform linux/amd64 -t duplocloud/duploctl-cfn:latest .
+# Build and push to Docker Hub
+docker buildx bake --provenance=false --push
 ```
 
 ### Pushing to a private ECR
 
-Lambda requires a **single-arch Docker V2 schema 2** manifest. The public multi-arch image
-contains both `amd64` and `arm64`; extract by digest and push only the one Lambda needs:
+Lambda requires images in the **same AWS account and region**. Use `duploctl cfn setup`
+to automatically pull the `linux/amd64` image from Docker Hub and push it to the portal's ECR:
+
+```sh
+duploctl cfn setup
+```
+
+Or manually:
 
 ```sh
 REPO=123456789012.dkr.ecr.us-east-1.amazonaws.com/duploctl-cfn
 
-# Log in
 aws ecr get-login-password | docker login --username AWS --password-stdin 123456789012.dkr.ecr.us-east-1.amazonaws.com
-
-# Get the amd64 digest from the multi-arch manifest
-DIGEST=$(docker manifest inspect --verbose duplocloud/duploctl-cfn:latest \
-  | jq -r '.[] | select(.Descriptor.platform.architecture=="amd64") | .Descriptor.digest')
-
-# Pull the single amd64 image by content-addressed digest, tag, push
-docker pull --platform linux/amd64 duplocloud/duploctl-cfn@$DIGEST
-docker tag duplocloud/duploctl-cfn@$DIGEST $REPO:latest
+docker pull --platform linux/amd64 duplocloud/duploctl-cfn:latest
+docker tag duplocloud/duploctl-cfn:latest $REPO:latest
 docker push $REPO:latest
 ```
-
-> **Why not `docker build --push`?**  BuildKit produces OCI manifests by
-> default, which DuploCloud and Lambda both reject.  If building locally,
-> disable BuildKit to get a Docker V2 schema 2 manifest:
-> ```sh
-> DOCKER_BUILDKIT=0 docker build --platform linux/amd64 -t $REPO:latest .
-> docker push $REPO:latest
-> ```
-
-Or let `duploctl cfn setup` handle it automatically.
 
 ---
 
