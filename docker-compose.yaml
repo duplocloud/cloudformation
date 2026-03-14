@@ -3,6 +3,7 @@ services:
     image: &image duplocloud/duploctl-cfn:latest
     build:
       context: .
+      dockerfile: Dockerfile
       target: runner
       args:
         PY_VERSION: ${PY_VERSION:-3.13}

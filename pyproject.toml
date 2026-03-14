@@ -1,10 +1,15 @@
 [project]
-name = "duplocloud-cfn"
-description = "AWS CloudFormation custom resource provider for DuploCloud."
+name = "duploctl-cfn"
+description = "DuploCloud CloudFormation manager plugin for duploctl."
 readme = "README.md"
 dynamic = ["version"]
 requires-python = ">=3.10.0"
-keywords = ["duplocloud", "cloudformation", "lambda", "aws"]
+keywords = [
+  "duplocloud",
+  "cloudformation",
+  "duploctl",
+  "aws",
+]
 classifiers = [
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: MIT License",
@@ -13,7 +18,10 @@ classifiers = [
 authors = [{ name = "DuploCloud", email = "support@duplocloud.net" }]
 maintainers = [{ name = "DuploCloud", email = "support@duplocloud.net" }]
 dependencies = [
-  "duplocloud-client>=0.4.2",
+  "duplocloud-client @ git+https://github.com/duplocloud/duploctl.git@feat/infrastructure-update-noop",
+  "duploctl-aws @ git+https://github.com/duplocloud/duploctl.git@feat/infrastructure-update-noop#subdirectory=plugins/aws",
+  "boto3>=1.34.74",
+  "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +35,7 @@ test = [
   "pytest-mock",
   "pytest-cov",
   "ruff",
+  "cfn-lambda @ file:lambda",
 ]
 
 [build-system]
@@ -37,22 +46,27 @@ build-backend = "setuptools.build_meta"
 Homepage = "https://github.com/duplocloud/cloudformation"
 Issues = "https://github.com/duplocloud/cloudformation/issues"
 
+[project.entry-points."duplocloud.net"]
+cfn = "duploctl_cfn.cfn:DuploCfn"
+
+[project.entry-points."formats.duplocloud.net"]
+cfn = "duploctl_cfn.formatter:tocfn"
+
 [tool.setuptools_scm]
+
+[tool.setuptools]
+include-package-data = false
+packages = ["duploctl_cfn"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "--verbose --cov=duplocloud --cov-report term-missing"
+addopts = "--verbose"
 testpaths = ["tests"]
 markers = [
   "unit: marks tests as unit tests",
   "integration: marks tests as integration tests",
-]
-
-[tool.coverage.run]
-omit = [
-  "*_test.py",
-  "**/conftest.py",
-  "**/__*__.py",
+  "aws: marks tests that require AWS credentials",
+  "cleanup: marks tests that clean up integration test resources",
 ]
 
 [tool.ruff]

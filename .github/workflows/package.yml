@@ -41,13 +41,15 @@ jobs:
       with:
         python-version: "3.13"
         cache: pip
-        cache-dependency-path: pyproject.toml
+        cache-dependency-path: lambda/pyproject.toml
 
     - name: Install Build Dependencies
+      working-directory: lambda
       run: pip install .[build]
 
     - name: Check True Version
       id: check_version
+      working-directory: lambda
       run: |
         version=$(python -m setuptools_scm)
         artifact="duploctl-cfn-${version}.zip"
@@ -56,6 +58,7 @@ jobs:
         echo "artifact=$artifact" >> $GITHUB_OUTPUT
 
     - name: Build Lambda ZIP
+      working-directory: lambda
       run: |
         mkdir -p package
         pip install . --target ./package

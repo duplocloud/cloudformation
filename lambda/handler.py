@@ -5,7 +5,9 @@ import logging
 from .adhoc import handle_adhoc_event
 from .cfn import handle_cfn_event, is_cfn_event
 
-logging.basicConfig(level=logging.INFO)
+# Lambda pre-initialises the root logger; basicConfig() is a no-op after
+# that.  Set the level directly so our INFO messages are not suppressed.
+logging.getLogger().setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -28,14 +30,26 @@ def handler(event: dict, context) -> object:
         ``ResponseURL``; returning a value has no effect).
         For ad-hoc events: The result of the duploctl command.
     """
-    logger.info("Received event type: %s", type(event).__name__)
     if is_cfn_event(event):
+        request_type = event.get("RequestType", "Unknown")
+        resource_type = event.get("ResourceType", "Unknown")
+        logical_id = event.get("LogicalResourceId", "Unknown")
+        stack_id = event.get("StackId", "Unknown")
         logger.info(
-            "Routing to CFN handler (RequestType=%s)",
-            event.get("RequestType"),
+            "CFN %s | %s | LogicalId=%s | Stack=%s",
+            request_type,
+            resource_type,
+            logical_id,
+            stack_id,
         )
         handle_cfn_event(event, context)
+        logger.info(
+            "CFN %s complete | %s | LogicalId=%s",
+            request_type,
+            resource_type,
+            logical_id,
+        )
         return None
 
-    logger.info("Routing to ad-hoc handler")
+    logger.info("Ad-hoc event: %s", event)
     return handle_adhoc_event(event)

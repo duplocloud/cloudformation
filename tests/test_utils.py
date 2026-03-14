@@ -2,7 +2,7 @@
 
 import pytest
 
-from duplocloud.cfn.utils import extract_properties, get_id, parse_resource_type
+from cfn_lambda.utils import extract_properties, get_id, parse_resource_type
 
 
 class TestParseResourceType:

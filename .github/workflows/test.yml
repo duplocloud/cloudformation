@@ -30,7 +30,7 @@ jobs:
       run: pip install .[test]
 
     - name: Lint with ruff
-      run: ruff check ./duplocloud
+      run: ruff check ./duplocloud_cfn
 
     - name: Test with pytest
       run: pytest tests --junit-xml=test-results.xml

@@ -121,19 +121,31 @@ def handle_cfn_event(event: dict, context) -> None:
             tenant=tenant,
         )
         duplo.validate = validate
-        duplo.wait = do_wait
+        # Delete events never wait — fire-and-forget so the Lambda always
+        # responds to CFN before timing out.  The DuploCloud deletion runs
+        # asynchronously regardless.
+        duplo.wait = do_wait and request_type != "Delete"
 
         # Respect Lambda remaining time for wait_timeout
         if context and hasattr(context, "get_remaining_time_in_millis"):
             remaining_ms = context.get_remaining_time_in_millis()
             # Leave a 15-second buffer for sending the response
             duplo.wait_timeout = max(1, (remaining_ms // 1000) - 15)
+        logger.info(
+            "DuploCtl configured: tenant=%s, wait=%s, wait_timeout=%s",
+            tenant, duplo.wait,
+            getattr(duplo, "wait_timeout", "default"),
+        )
 
         resource = duplo.load(kind)
 
         if request_type in ("Create", "Update"):
+            name = resource.name_from_body(body)
+            logger.info(
+                "%s %s '%s' (tenant=%s, wait=%s)",
+                request_type, kind, name, tenant, do_wait,
+            )
             if request_type == "Create" and not allow_import:
-                name = resource.name_from_body(body)
                 try:
                     resource.find(name)
                     raise DuploError(
@@ -145,33 +157,74 @@ def handle_cfn_event(event: dict, context) -> None:
                     if exc.code == 409:
                         raise
 
-            resource.apply(body)
+            # Use explicit create/update instead of apply() to avoid
+            # version-sensitive positional-arg differences in apply().
+            existing = None
+            try:
+                existing = resource.find(name)
+            except DuploError:
+                pass
+            if existing and request_type == "Update" and hasattr(resource, "update"):
+                # Update event: apply desired state.
+                resource.update(name, body)
+            elif existing and request_type == "Create":
+                # Create event with existing resource: AllowImport already
+                # checked above — adopt it as-is, do not attempt an update.
+                logger.info(
+                    "Create %s '%s': resource exists, importing (AllowImport=true)",
+                    kind, name,
+                )
+            elif not existing:
+                resource.create(body)
+            logger.info("%s %s '%s' applied", request_type, kind, name)
 
-            name = resource.name_from_body(body)
             found = resource.find(name)
-            data = found
             if query:
                 data = jmespath.search(query, found)
+            else:
+                data = found
+            # CFN response payload is capped at 4096 bytes total.
+            # If the resource object is too large, send only the
+            # physical resource id fields so Fn::GetAtt still works
+            # for the most common use-case (referencing by name/id).
+            if data and len(json.dumps(data)) > 3500:
+                logger.warning(
+                    "Response data too large (%d bytes), truncating "
+                    "to PhysicalResourceId fields only",
+                    len(json.dumps(data)),
+                )
+                data = {"Id": physical_id}
             physical_id = get_id(resource, found)
+            logger.info(
+                "%s %s '%s' done, PhysicalId=%s",
+                request_type, kind, name, physical_id,
+            )
 
         elif request_type == "Delete":
             if hasattr(resource, "delete"):
+                name = resource.name_from_body(body)
+                logger.info("Delete %s '%s' (tenant=%s)", kind, name, tenant)
                 try:
-                    name = resource.name_from_body(body)
+                    resource.find(name)
+                except DuploError:
+                    logger.info(
+                        "Delete %s '%s': already gone (idempotent)",
+                        kind, name,
+                    )
+                else:
                     resource.delete(name)
-                except DuploError as exc:
-                    if exc.code == 404:
-                        logger.info(
-                            "Resource already gone during Delete (idempotent)"
-                        )
-                    else:
-                        raise
+                    logger.info(
+                        "Delete %s '%s': delete call complete", kind, name
+                    )
             else:
                 logger.info(
-                    "Resource kind '%s' has no delete(); treating as no-op",
-                    kind,
+                    "Delete %s: no delete() method, treating as no-op", kind
                 )
 
+        logger.info(
+            "Sending CFN SUCCESS for %s %s (PhysicalId=%s)",
+            request_type, logical_id, physical_id,
+        )
         send_response(
             response_url,
             CFN_SUCCESS,
@@ -183,7 +236,10 @@ def handle_cfn_event(event: dict, context) -> None:
         )
 
     except Exception as exc:  # noqa: BLE001
-        logger.exception("CFN handler error")
+        logger.exception(
+            "CFN handler error during %s of %s: %s",
+            request_type, logical_id, exc,
+        )
         send_response(
             response_url,
             CFN_FAILED,

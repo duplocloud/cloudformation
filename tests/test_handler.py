@@ -2,8 +2,8 @@
 
 import pytest
 
-from duplocloud.cfn.cfn import is_cfn_event
-from duplocloud.cfn.handler import handler
+from cfn_lambda.cfn import is_cfn_event
+from cfn_lambda.handler import handler
 
 
 class TestIsCfnEvent:

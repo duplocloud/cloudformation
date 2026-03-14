@@ -1,132 +1,222 @@
-# DuploCloud CloudFormation Provider
+# DuploCloud CloudFormation
 
-An AWS Lambda function that acts as a CloudFormation custom resource provider for [DuploCloud](https://duplocloud.com). Every resource available in [duploctl](https://github.com/duplocloud/duploctl) becomes a CloudFormation-manageable resource via `Custom::Duplo@<Kind>` resource types.
+Two independent components live in this repository:
+
+| Component | What it is |
+|-----------|-----------|
+| **`duploctl-cfn`** (this package) | A `duploctl` plugin that manages CloudFormation stacks and installs the CFN lambda |
+| **`cfn-lambda`** (`lambda/`) | The AWS Lambda that acts as a CloudFormation custom resource provider |
+
+The `Dockerfile` / `docker-compose.yaml` at the repo root build **only the Lambda image**.
 
 ---
 
-## How It Works
+## Quick start — manager plugin
 
-The Lambda function receives CloudFormation custom resource lifecycle events (Create, Update, Delete) and manages DuploCloud resources as part of a CloudFormation stack.
+```sh
+pip install duploctl-cfn
 
-| CFN Event | duploctl action |
-|-----------|----------------|
-| Create    | `apply()` + `wait()` |
-| Update    | `apply()` + `wait()` |
-| Delete    | `delete()` (no-op if unsupported) |
+export DUPLO_HOST=https://myportal.duplocloud.net
+export DUPLO_TOKEN=...
+export DUPLO_TENANT=default
 
-`apply()` is idempotent — it finds the resource and updates it if it exists, or creates it if not. `wait()` ensures the underlying resource is fully provisioned before CloudFormation receives a SUCCESS response.
+# Deploy the CFN lambda (image mode — pulls from ECR)
+duploctl cfn setup
 
-### ResourceType Naming Convention
+# Deploy the CFN lambda (zip mode — pulls from S3)
+duploctl cfn setup --mode zip
 
-`Custom::Duplo@<Kind>` — the `Kind` after `@` is lowercased and used directly as the duploctl resource name:
+# Create / update a stack
+duploctl cfn apply -f stack.yaml
 
-| CloudFormation ResourceType | duploctl resource |
-|-----------------------------|-------------------|
-| `Custom::Duplo@Service`     | `service`         |
-| `Custom::Duplo@Tenant`      | `tenant`          |
-| `Custom::Duplo@S3`          | `s3`              |
-| `Custom::Duplo@Rds`         | `rds`             |
+# List stacks
+duploctl cfn list
+
+# Find a single stack
+duploctl cfn find my-stack
+```
+
+---
+
+## Lambda setup — image mode vs zip mode
+
+The `setup` command deploys the Lambda function that handles CloudFormation custom resource events.
+
+### Image mode (default)
+
+```sh
+duploctl cfn setup
+```
+
+What it does:
+1. Ensures the `duploctl-cfn` ECR repository exists in the current tenant
+2. Pulls the `linux/amd64` digest of `duplocloud/duploctl-cfn:latest` from Docker Hub and pushes it to the private ECR
+3. Deploys (or updates) the Lambda function using the ECR image
+
+> **Why single-arch?** AWS Lambda only accepts Docker V2 single-architecture
+> manifests. The public image is multi-arch (amd64 + arm64); the setup command
+> extracts and pushes only the `amd64` image by its content-addressed digest to
+> avoid the OCI manifest-list rejection.
+
+Individual steps can also be called directly:
+
+```sh
+# Ensure ECR repo
+duploctl cfn apply_ecr
+
+# Deploy lambda (after ECR image is pushed)
+duploctl cfn apply_lambda --lambda-name duploctl-cfn \
+  --image 123456789012.dkr.ecr.us-east-1.amazonaws.com/duploctl-cfn:latest
+```
+
+### Zip mode
+
+```sh
+duploctl cfn setup --mode zip
+```
+
+What it does:
+1. Ensures an S3 bucket exists (derived from the AWS account ID)
+2. Uploads `duploctl-cfn.zip` to the bucket
+3. Deploys the Lambda using the ZIP artifact
+
+```sh
+# Target a specific bucket
+duploctl cfn setup --mode zip --bucket my-artifacts-bucket
+```
+
+---
+
+## Building and publishing the Lambda image
+
+The Docker image is multi-arch and built with `docker buildx bake`:
+
+```sh
+# Build and push to Docker Hub (CI — both amd64 and arm64)
+docker buildx bake --push
+
+# Build locally for testing
+docker build --platform linux/amd64 -t duplocloud/duploctl-cfn:latest .
+```
+
+### Pushing to a private ECR
+
+Lambda requires a **single-arch Docker V2 schema 2** manifest. The public multi-arch image
+contains both `amd64` and `arm64`; extract by digest and push only the one Lambda needs:
+
+```sh
+REPO=123456789012.dkr.ecr.us-east-1.amazonaws.com/duploctl-cfn
+
+# Log in
+aws ecr get-login-password | docker login --username AWS --password-stdin 123456789012.dkr.ecr.us-east-1.amazonaws.com
+
+# Get the amd64 digest from the multi-arch manifest
+DIGEST=$(docker manifest inspect --verbose duplocloud/duploctl-cfn:latest \
+  | jq -r '.[] | select(.Descriptor.platform.architecture=="amd64") | .Descriptor.digest')
+
+# Pull the single amd64 image by content-addressed digest, tag, push
+docker pull --platform linux/amd64 duplocloud/duploctl-cfn@$DIGEST
+docker tag duplocloud/duploctl-cfn@$DIGEST $REPO:latest
+docker push $REPO:latest
+```
+
+> **Why not `docker build --push`?**  BuildKit produces OCI manifests by
+> default, which DuploCloud and Lambda both reject.  If building locally,
+> disable BuildKit to get a Docker V2 schema 2 manifest:
+> ```sh
+> DOCKER_BUILDKIT=0 docker build --platform linux/amd64 -t $REPO:latest .
+> docker push $REPO:latest
+> ```
+
+Or let `duploctl cfn setup` handle it automatically.
+
+---
+
+## CFN stack format
+
+CFN stacks are expressed as standard CloudFormation YAML/JSON. `apply` accepts a body with
+`StackName` + `TemplateBody` (or `TemplateURL`):
+
+```sh
+duploctl cfn apply -f my-stack.yaml
+```
+
+```yaml
+# my-stack.yaml
+StackName: my-app-stack
+TemplateBody: |
+  AWSTemplateFormatVersion: "2010-09-09"
+  Resources:
+    MyTenant:
+      Type: Custom::Duplo@Tenant
+      ...
+Capabilities:
+  - CAPABILITY_IAM
+```
+
+---
+
+## CloudFormation custom resource reference
+
+### Resource type naming
+
+`Custom::Duplo@<Kind>` — the `Kind` after `@` maps to the `duploctl` resource name (case-insensitive):
+
+| CloudFormation Type | duploctl resource |
+|---------------------|-------------------|
+| `Custom::Duplo@Tenant` | `tenant` |
+| `Custom::Duplo@Infrastructure` | `infrastructure` |
+| `Custom::Duplo@Service` | `service` |
+| `Custom::Duplo@S3` | `s3` |
+| `Custom::Duplo@Rds` | `rds` |
 | `Custom::Duplo@Batch_Compute` | `batch_compute` |
 
-### Two Invocation Modes
-
-1. **CloudFormation mode** (default): Receives CFN lifecycle events identified by the `ResponseURL` field.
-2. **Ad-hoc mode**: Receives pipe-style events via `aws lambda invoke`. Controlled by `DUPLO_ADHOC_ENABLED` (default: `true`).
-
----
-
-## Deployment
-
-### Container Image (recommended)
-
-```bash
-aws lambda create-function \
-  --function-name duploctl \
-  --package-type Image \
-  --code ImageUri=duplocloud/duploctl-cfn:latest \
-  --role arn:aws:iam::123456789012:role/duploctl-lambda-role \
-  --timeout 900 \
-  --environment Variables="{DUPLO_HOST=https://myportal.duplocloud.net,DUPLO_TOKEN=...}"
-```
-
-### Lambda ZIP
-
-Download the latest `duploctl-cfn-<version>.zip` from [GitHub Releases](https://github.com/duplocloud/cloudformation/releases).
-
-```bash
-aws lambda create-function \
-  --function-name duploctl \
-  --runtime python3.13 \
-  --handler duplocloud.cfn.handler.handler \
-  --role arn:aws:iam::123456789012:role/duploctl-lambda-role \
-  --zip-file fileb://duploctl-cfn.zip \
-  --timeout 900 \
-  --environment Variables="{DUPLO_HOST=https://myportal.duplocloud.net,DUPLO_TOKEN=...}"
-```
-
-### Required IAM Permissions
-
-The Lambda execution role needs:
-- `lambda:InvokeFunction` (for ad-hoc callers, granted to the calling role)
-- Logging: `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents`
-
-No AWS API calls are made by the Lambda itself — all calls go to the DuploCloud portal API.
-
-### Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DUPLO_HOST` | Yes | DuploCloud portal URL (e.g. `https://myportal.duplocloud.net`) |
-| `DUPLO_TOKEN` | Yes | DuploCloud API token |
-| `DUPLO_ADHOC_ENABLED` | No | Enable ad-hoc invocation mode (default: `true`) |
-
----
-
-## CFN Resource Properties
+### Resource properties
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `Tenant` | String | — | Tenant name for tenant-scoped resources |
-| `Wait` | Boolean | `true` | Wait for full provisioning before responding SUCCESS |
-| `Validate` | Boolean | `true` | Enable client-side Pydantic model validation |
-| `Query` | String | — | JMESPath expression to filter `Fn::GetAtt` output |
-| `AllowImport` | Boolean | `true` | Allow adopting a pre-existing resource on Create |
-| `Body` | Object | — | Explicit resource body; if omitted, remaining properties are used |
+| `ServiceToken` | String | — | Lambda ARN |
+| `Tenant` | String | — | Tenant name (for tenant-scoped resources) |
+| `Body` | Object | — | Resource body; if omitted, all other properties are used |
+| `Wait` | Boolean | `true` | Wait for provisioning to complete before returning |
+| `Query` | String | — | JMESPath expression applied to `Fn::GetAtt` output |
+| `AllowImport` | Boolean | `true` | Adopt a pre-existing resource on Create |
 
----
+### Examples
 
-## CloudFormation Examples
-
-### Deploy the Lambda function
+#### Create a Tenant inside an Infrastructure
 
 ```yaml
-DuploctlLambda:
-  Type: AWS::Lambda::Function
-  Properties:
-    FunctionName: duploctl
-    PackageType: Image
-    Code:
-      ImageUri: duplocloud/duploctl-cfn:latest
-    Role: !GetAtt DuploctlRole.Arn
-    Timeout: 900
-    Environment:
-      Variables:
-        DUPLO_HOST: https://myportal.duplocloud.net
-        DUPLO_TOKEN: !Sub "{{resolve:secretsmanager:duplo-token}}"
+AWSTemplateFormatVersion: "2010-09-09"
+Resources:
+
+  DuploInfra:
+    Type: Custom::Duplo@Infrastructure
+    Properties:
+      ServiceToken: !GetAtt DuploctlLambda.Arn
+      Wait: true
+      Body:
+        Name: my-infra
+        Cloud: 0
+        Region: us-east-1
+        EnableK8Cluster: false
+        Vnet:
+          AddressPrefix: "10.100.0.0/16"
+          SubnetCidr: 22
+
+  DuploTenant:
+    Type: Custom::Duplo@Tenant
+    DependsOn: DuploInfra
+    Properties:
+      ServiceToken: !GetAtt DuploctlLambda.Arn
+      Wait: true
+      Body:
+        Name: my-tenant
+        AccountName: my-tenant
+        PlanID: my-infra
 ```
 
-### Create a Tenant
-
-```yaml
-MyTenant:
-  Type: Custom::Duplo@Tenant
-  Properties:
-    ServiceToken: !GetAtt DuploctlLambda.Arn
-    AccountName: my-tenant
-    PlanID: my-infra
-```
-
-### Create a Service (using Body key)
+#### Deploy a Service into a Tenant
 
 ```yaml
 MyService:
@@ -134,27 +224,34 @@ MyService:
   Properties:
     ServiceToken: !GetAtt DuploctlLambda.Arn
     Tenant: my-tenant
-    Validate: false
     Body:
       Name: nginx
       Image: nginx:latest
       Replicas: 2
 ```
 
-### Create Infrastructure
+#### Query a stack output with JMESPath
 
 ```yaml
-MyInfra:
-  Type: Custom::Duplo@Infrastructure
+MyBucket:
+  Type: Custom::Duplo@S3
   Properties:
     ServiceToken: !GetAtt DuploctlLambda.Arn
-    Name: my-infra
-    Cloud: 0
-    Region: us-east-1
-    Vpc: "10.220.0.0/16"
-    EnableK8Cluster: true
-
+    Tenant: my-tenant
+    Query: BucketName
+    Body:
+      Name: my-bucket
 ```
+
+---
+
+## Lambda environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DUPLO_HOST` | Yes | Portal URL (`https://myportal.duplocloud.net`) |
+| `DUPLO_TOKEN` | Yes | DuploCloud API token |
+| `DUPLO_ADHOC_ENABLED` | No | Enable direct `aws lambda invoke` calls (default: `true`) |
 
 ### Use Fn::GetAtt with Query
 

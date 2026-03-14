@@ -1,0 +1,44 @@
+[project]
+name = "cfn-lambda"
+description = "DuploCloud CloudFormation custom resource Lambda function."
+dynamic = ["version"]
+requires-python = ">=3.10.0"
+keywords = ["duplocloud", "cloudformation", "lambda", "aws"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+authors = [{ name = "DuploCloud", email = "support@duplocloud.net" }]
+maintainers = [{ name = "DuploCloud", email = "support@duplocloud.net" }]
+dependencies = [
+  "duplocloud-client @ git+https://github.com/duplocloud/duploctl.git@feat/infrastructure-update-noop",
+  "jmespath>=1.0",
+]
+
+[project.optional-dependencies]
+build = [
+  "setuptools_scm",
+  "build",
+  "wheel>=0.46.2",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project.urls]
+Homepage = "https://github.com/duplocloud/cloudformation"
+Issues = "https://github.com/duplocloud/cloudformation/issues"
+
+[tool.setuptools_scm]
+root = ".."
+fallback_version = "0.0.0"
+
+[tool.setuptools]
+include-package-data = false
+packages = ["cfn_lambda"]
+package-dir = {"cfn_lambda" = "."}
+
+[tool.ruff]
+line-length = 79

@@ -32,13 +32,6 @@ def aws_plugin(duplo):
     return duplo.load("aws")
 
 
-@pytest.fixture(scope="session")
-def cfn_plugin(duplo):
-    """The duploctl-cfn manager plugin."""
-    pytest.importorskip("duploctl_cfn")
-    return duplo.load("cfn")
-
-
 @pytest.fixture(scope="function")
 def cfn_boto(aws_plugin):
     """A boto3 CloudFormation client authenticated via DuploCloud JIT.
@@ -47,12 +40,6 @@ def cfn_boto(aws_plugin):
     STS credentials, preventing ExpiredToken errors on long test runs.
     """
     return aws_plugin.load("cloudformation", refresh=True)
-
-
-@pytest.fixture(scope="session")
-def cfn_boto_session(aws_plugin):
-    """Session-scoped CloudFormation client for session-level fixtures."""
-    return aws_plugin.load("cloudformation")
 
 
 @pytest.fixture(scope="session")

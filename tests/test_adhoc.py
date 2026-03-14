@@ -2,7 +2,7 @@
 
 import pytest
 
-from duplocloud.cfn.adhoc import handle_adhoc_event, is_adhoc_enabled
+from cfn_lambda.adhoc import handle_adhoc_event, is_adhoc_enabled
 
 
 class TestIsAdhocEnabled:

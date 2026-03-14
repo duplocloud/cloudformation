@@ -1,25 +1,14 @@
 ARG PY_VERSION=3.13
 
-# Stage 1: Build the wheel
-FROM python:${PY_VERSION} AS builder
-
-WORKDIR /app
-
-COPY . .
-
-RUN <<EOF
-apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
-pip install --no-cache-dir --upgrade pip
-pip install --no-cache-dir .[build]
-python -m build --no-isolation
-EOF
-
-# Stage 2: Lambda runtime image
+# Stage 1: Lambda runtime image
 FROM public.ecr.aws/lambda/python:${PY_VERSION} AS runner
 
-COPY --from=builder /app/dist/*.whl /tmp/
+# git is required to install the duplocloud-client git dependency in lambda/pyproject.toml
+RUN dnf install -y git && dnf clean all
 
-RUN pip install --no-cache-dir /tmp/*.whl && rm -rf /tmp/*.whl
+COPY lambda/ /app/lambda/
+
+RUN pip install --no-cache-dir /app/lambda/ && rm -rf /app
 
 # Lambda handler: module.function
-CMD ["duplocloud.cfn.handler.handler"]
+CMD ["cfn_lambda.handler.handler"]
